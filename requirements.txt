@@ -1,0 +1,5 @@
+einops==0.8.1
+packaging==24.2
+setuptools==67.8.0
+torch==2.6.0
+torchvision==0.21.0
