@@ -1,8 +1,20 @@
 # -*- coding: utf-8 -*-
+import os
+import re
+import csv
+import cv2
 import time
-
-def log_time(start, label):
-    print(f"🕒 {label} took {time.time() - start:.2f} seconds")
+import torch
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from torch import nn, optim
+from torch.utils.data import DataLoader, random_split
+from torchvision import datasets, transforms
+import torch.nn.functional as F
+from vit_pytorch import ViT
+from sklearn.metrics import confusion_matrix
 
 # ==== CONFIG ====
 DATASET_ROOT = "/mnt/beegfs/dgx/acarranza/docs/harris-sentinel-swarm/OTB100"
@@ -23,24 +35,26 @@ SEARCH_RADIUS = 20
 STRIDE = 10
 
 # Device config
-import torch
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.backends.cudnn.benchmark = True
 
-# ==== IMPORTS ====
-import os
-import re
-import csv
-import cv2
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from torch import nn, optim
-from torch.utils.data import DataLoader, random_split
-from torchvision import datasets, transforms
-import torch.nn.functional as F
-from vit_pytorch import ViT
-from sklearn.metrics import confusion_matrix
+# ==== UTILS ====
+def log_time(start, label):
+    print(f"🕒 {label} took {time.time() - start:.2f} seconds")
+
+def safe_iou(boxA, boxB):
+    try:
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[0]+boxA[2], boxB[0]+boxB[2])
+        yB = min(boxA[1]+boxA[3], boxB[1]+boxB[3])
+        interArea = max(0, xB - xA) * max(0, yB - yA)
+        boxAArea = boxA[2] * boxA[3]
+        boxBArea = boxB[2] * boxB[3]
+        return interArea / float(boxAArea + boxBArea - interArea)
+    except Exception as e:
+        print(f"Failed to compute IoU: {e} | GT: {boxA}, Pred: {boxB}")
+        return 0.0
 
 # ==== TRANSFORMS ====
 transform = transforms.Compose([
@@ -56,7 +70,7 @@ class_names = full_dataset.classes
 train_len = int(TRAIN_SPLIT * len(full_dataset))
 test_len = len(full_dataset) - train_len
 train_set, test_set = random_split(full_dataset, [train_len, test_len])
-train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
+train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
 test_loader = DataLoader(test_set, batch_size=1, shuffle=False)
 log_time(start_time, "Data loading")
 
@@ -157,18 +171,6 @@ log_time(start_time, "Model saving")
 start_time = time.time()
 dataset = datasets.ImageFolder(DATASET_ROOT)
 class_names = dataset.classes
-
-model = ViT(
-    image_size=IMG_SIZE,
-    patch_size=16,
-    num_classes=len(class_names),
-    dim=512,
-    depth=6,
-    heads=8,
-    mlp_dim=1024,
-    dropout=0.1,
-    emb_dropout=0.1
-).to(DEVICE)
 state_dict = torch.load(MODEL_SAVE_PATH, map_location=DEVICE)
 model.load_state_dict(state_dict, strict=False)
 model.eval()
@@ -187,20 +189,6 @@ def classify_patch(img_patch):
         probs = F.softmax(output, dim=1)[0]
         pred_idx = torch.argmax(probs).item()
         return class_names[pred_idx], probs[pred_idx].item()
-
-def safe_iou(boxA, boxB):
-    try:
-        xA = max(boxA[0], boxB[0])
-        yA = max(boxA[1], boxB[1])
-        xB = min(boxA[0]+boxA[2], boxB[0]+boxB[2])
-        yB = min(boxA[1]+boxA[3], boxB[1]+boxB[3])
-        interArea = max(0, xB - xA) * max(0, yB - yA)
-        boxAArea = boxA[2] * boxA[3]
-        boxBArea = boxB[2] * boxB[3]
-        return interArea / float(boxAArea + boxBArea - interArea)
-    except Exception as e:
-        print(f"Failed to compute IoU: {e} | GT: {boxA}, Pred: {boxB}")
-        return 0.0
 
 all_results = []
 for seq_name in sorted(os.listdir(DATASET_ROOT)):
@@ -238,23 +226,34 @@ for seq_name in sorted(os.listdir(DATASET_ROOT)):
             continue
 
         prev_x, prev_y, prev_w, prev_h = predicted_boxes[-1]
-        best_conf = -1
-        best_box = None
+        candidates = []
+        positions = []
 
-        for dx in range(-SEARCH_RADIUS, SEARCH_RADIUS+1, STRIDE):
-            for dy in range(-SEARCH_RADIUS, SEARCH_RADIUS+1, STRIDE):
+        for dx in range(-SEARCH_RADIUS, SEARCH_RADIUS + 1, STRIDE):
+            for dy in range(-SEARCH_RADIUS, SEARCH_RADIUS + 1, STRIDE):
                 cx = max(0, prev_x + dx)
                 cy = max(0, prev_y + dy)
-                if cx+prev_w > frame.shape[1] or cy+prev_h > frame.shape[0]:
+                if cx + prev_w > frame.shape[1] or cy + prev_h > frame.shape[0]:
                     continue
-                candidate = frame[cy:cy+prev_h, cx:cx+prev_w]
-                pred_label, conf = classify_patch(candidate)
-                if pred_label == true_label and conf > best_conf:
-                    best_conf = conf
-                    best_box = [cx, cy, prev_w, prev_h]
+                crop = frame[cy:cy + prev_h, cx:cx + prev_w]
+                try:
+                    tensor = transform(crop).unsqueeze(0)
+                    candidates.append(tensor)
+                    positions.append([cx, cy])
+                except:
+                    continue
 
-        if best_box is None:
+        if not candidates:
             best_box = predicted_boxes[-1]
+        else:
+            batch_tensor = torch.cat(candidates).to(DEVICE)
+            with torch.no_grad():
+                outputs = model(batch_tensor)
+                probs = F.softmax(outputs, dim=1)
+                class_idx = class_names.index(true_label)
+                confidences = probs[:, class_idx]
+            max_idx = torch.argmax(confidences).item()
+            best_box = [positions[max_idx][0], positions[max_idx][1], prev_w, prev_h]
 
         predicted_boxes.append(best_box)
         iou = safe_iou(gt_boxes[i], best_box)
