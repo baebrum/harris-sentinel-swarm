@@ -31,8 +31,8 @@ TRAIN_SPLIT = 0.9
 LEARNING_RATE = 3e-4
 
 # Tracking Parameters
-SEARCH_RADIUS = 20
-STRIDE = 10
+SEARCH_RADIUS = 40
+STRIDE = 5
 
 # Device config
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -146,20 +146,20 @@ print(f"🎯 Test Accuracy: {100 * correct / total:.2f}%")
 log_time(start_time, "Model testing")
 
 # ==== CONFUSION MATRIX ====
-start_time = time.time()
-df = pd.read_csv(CSV_LOG_PATH)
-true_labels = df["true_label"]
-pred_labels = df["predicted_label"]
-labels = sorted(df["true_label"].unique())
-cm = confusion_matrix(true_labels, pred_labels, labels=labels)
-plt.figure(figsize=(8, 6))
-sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=labels, yticklabels=labels)
-plt.xlabel("Predicted Label")
-plt.ylabel("True Label")
-plt.title("ViT Classifier - Confusion Matrix")
-plt.tight_layout()
-plt.show()
-log_time(start_time, "Confusion matrix generation")
+# start_time = time.time()
+# df = pd.read_csv(CSV_LOG_PATH)
+# true_labels = df["true_label"]
+# pred_labels = df["predicted_label"]
+# labels = sorted(df["true_label"].unique())
+# cm = confusion_matrix(true_labels, pred_labels, labels=labels)
+# plt.figure(figsize=(8, 6))
+# sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=labels, yticklabels=labels)
+# plt.xlabel("Predicted Label")
+# plt.ylabel("True Label")
+# plt.title("ViT Classifier - Confusion Matrix")
+# plt.tight_layout()
+# # plt.show()
+# log_time(start_time, "Confusion matrix generation")
 
 # ==== SAVE MODEL ====
 start_time = time.time()
@@ -192,6 +192,8 @@ def classify_patch(img_patch):
 
 all_results = []
 for seq_name in sorted(os.listdir(DATASET_ROOT)):
+    if seq_name != "Woman":
+        continue
     seq_time = time.time()
     seq_path = os.path.join(DATASET_ROOT, seq_name)
     gt_path = os.path.join(seq_path, "groundtruth_rect.txt")
@@ -283,11 +285,27 @@ start_time = time.time()
 results_df = pd.DataFrame(all_results)
 results_df.to_csv(CSV_OUTPUT, index=False)
 print(f"Tracking complete for all sequences. Results saved to {CSV_OUTPUT}")
+
+# Calculate and display overall IoU
 if 'iou' in results_df.columns and not results_df['iou'].empty:
     print(f"Overall Average IoU: {results_df['iou'].mean():.4f}")
+
+    # ==== CALCULATE AVERAGE IOU PER SEQUENCE ====
+    avg_iou_per_sequence = results_df.groupby("sequence")["iou"].mean().reset_index()
+    avg_iou_per_sequence.columns = ["sequence", "average_iou"]
+    avg_iou_per_sequence = avg_iou_per_sequence.sort_values(by="average_iou", ascending=False)
+
+    print("\n=== Average IoU per Sequence ===")
+    print(avg_iou_per_sequence.to_string(index=False))
+
+
+    # Optional: Save to CSV
+    avg_iou_per_sequence.to_csv("average_iou_per_sequence.csv", index=False)
 else:
     print("No valid IoU values were recorded.")
+
 log_time(start_time, "Saving results")
+
 
 # ==== VISUALIZATION FUNCTION ====
 def visualize_prediction(folder_path=DATASET_ROOT, sequence_name="Woman", frame_name="0002.jpg", csv_path=VISUALIZATION_CSV):
@@ -315,7 +333,7 @@ def visualize_prediction(folder_path=DATASET_ROOT, sequence_name="Woman", frame_
     plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     plt.title(f"{sequence_name} | Frame: {frame_name} | IoU: {row['iou']:.2f}")
     plt.axis('off')
-    plt.show()
+    # plt.show()
 
 # Optional: call to visualize
-visualize_prediction(sequence_name="Woman", frame_name="0002.jpg")
+# visualize_prediction(sequence_name="Woman", frame_name="0002.jpg")
