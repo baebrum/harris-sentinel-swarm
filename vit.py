@@ -162,7 +162,7 @@ def classify_patch(model, transform, class_names, img_patch):
         pred_idx = torch.argmax(probs).item()
         return class_names[pred_idx], probs[pred_idx].item()
 
-def track_sequence(seq_name, model, transform, class_names):
+def track_sequence(seq_name, model, transform, class_names, reclassify_every=10, blend_alpha=0.7):
     results = []
     seq_path = os.path.join(DATASET_ROOT, seq_name)
     gt_path = os.path.join(seq_path, "groundtruth_rect.txt")
@@ -183,7 +183,7 @@ def track_sequence(seq_name, model, transform, class_names):
 
     x, y, w, h = gt_boxes[0]
     crop = first_frame[y:y+h, x:x+w]
-    true_label, _ = classify_patch(model, transform, class_names, crop)
+    true_label, _ = classify_patch(model, transform, class_names, crop)  # Initial label for tracking
     predicted_boxes.append([x, y, w, h])
     iou_scores.append(1.0)
     processed_frames.append(frame_files[0])
@@ -216,14 +216,19 @@ def track_sequence(seq_name, model, transform, class_names):
                 outputs = model(batch_tensor)
                 probs = F.softmax(outputs, dim=1)
                 class_idx = class_names.index(true_label)
-                confidences = probs[:, class_idx]
-            max_idx = torch.argmax(confidences).item()
+                confidences = probs[:, class_idx].cpu().numpy()
+                iou_scores_local = [safe_iou(gt_boxes[i], [x, y, prev_w, prev_h]) for (x, y) in positions]
+                scores = [blend_alpha * c + (1 - blend_alpha) * iou for c, iou in zip(confidences, iou_scores_local)]
+                max_idx = np.argmax(scores)
             best_box = [positions[max_idx][0], positions[max_idx][1], prev_w, prev_h]
         else:
             best_box = predicted_boxes[-1]
 
         predicted_boxes.append(best_box)
         iou_scores.append(safe_iou(gt_boxes[i], best_box))
+        updated_label = periodic_reclassify(model, transform, class_names, frame, best_box, i, reclassify_every)
+        if updated_label:
+            true_label = updated_label
         processed_frames.append(frame_files[i])
 
     for i in range(min(len(processed_frames), len(gt_boxes))):
@@ -237,6 +242,12 @@ def track_sequence(seq_name, model, transform, class_names):
     return results
 
 # ==== RUN TRACKING ====
+def periodic_reclassify(model, transform, class_names, frame, box, frame_index, frequency=10):
+    if frame_index % frequency == 0:
+        x, y, w, h = box
+        patch = frame[y:y+h, x:x+w]
+        return classify_patch(model, transform, class_names, patch)[0]
+    return None
 start_time = time.time()
 model.load_state_dict(torch.load(MODEL_SAVE_PATH, map_location=DEVICE))
 model.eval()
@@ -252,6 +263,7 @@ all_results = []
 for seq in sorted(os.listdir(DATASET_ROOT)):
     if seq != "Woman":
         continue
+    log.info(f"tracking started for {seq}")
     seq_time = time.time()
     all_results.extend(track_sequence(seq, model, inference_transform, class_names))
     log_time(seq_time, f"Sequence '{seq}'")
