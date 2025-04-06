@@ -336,4 +336,5 @@ def visualize_prediction(folder_path=DATASET_ROOT, sequence_name="Woman", frame_
     # plt.show()
 
 # Optional: call to visualize
-# visualize_prediction(sequence_name="Woman", frame_name="0002.jpg")
+visualize_prediction(sequence_name="Woman", frame_name="0002.jpg")
+plt.show()
