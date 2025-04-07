@@ -25,7 +25,7 @@ BATCH_SIZE, EPOCHS = 16, 5
 IMG_SIZE = 224
 TRAIN_SPLIT = 0.9
 LEARNING_RATE = 3e-4
-SEARCH_RADIUS, STRIDE = 20, 10
+SEARCH_RADIUS, STRIDE = 10, 10
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.backends.cudnn.benchmark = True
@@ -138,7 +138,7 @@ def classify_patch(model, transform, class_names, patch):
         idx = probs.argmax().item()
         return class_names[idx], probs[idx].item()
 
-def periodic_reclassify(model, transform, class_names, frame, box, index, freq=10):
+def periodic_reclassify(model, transform, class_names, frame, box, index, freq=5):
     if index % freq == 0:
         x, y, w, h = box
         return classify_patch(model, transform, class_names, frame[y:y+h, x:x+w])[0]
@@ -155,44 +155,77 @@ def track_sequence(seq_name, model, transform, class_names):
     frame_files = sorted(os.listdir(img_folder))
     frame0 = cv2.imread(os.path.join(img_folder, frame_files[0]))
     x, y, w, h = gt_boxes[0]
+
     true_label, _ = classify_patch(model, transform, class_names, frame0[y:y+h, x:x+w])
-    predicted_boxes, iou_scores, frames = [[x, y, w, h]], [1.0], [frame_files[0]]
+    predicted_boxes = [[x, y, w, h]]
+    iou_scores = [1.0]
+    frames = [frame_files[0]]
 
     for i in range(1, len(frame_files)):
         frame = cv2.imread(os.path.join(img_folder, frame_files[i]))
         prev_x, prev_y, w, h = predicted_boxes[-1]
         candidates, positions = [], []
 
-        for dx in range(-SEARCH_RADIUS, SEARCH_RADIUS+1, STRIDE):
-            for dy in range(-SEARCH_RADIUS, SEARCH_RADIUS+1, STRIDE):
-                cx, cy = max(0, prev_x+dx), max(0, prev_y+dy)
-                if cx+w > frame.shape[1] or cy+h > frame.shape[0]: continue
-                crop = frame[cy:cy+h, cx:cx+w]
-                tensor = torch.from_numpy(cv2.resize(crop, (IMG_SIZE, IMG_SIZE))).permute(2, 0, 1).float()/255.
-                tensor = ((tensor - 0.5) / 0.5).unsqueeze(0).to(DEVICE)
-                candidates.append(tensor)
-                positions.append([cx, cy])
+        for dx in range(-SEARCH_RADIUS, SEARCH_RADIUS + 1, STRIDE):
+            for dy in range(-SEARCH_RADIUS, SEARCH_RADIUS + 1, STRIDE):
+                cx, cy = max(0, prev_x + dx), max(0, prev_y + dy)
+                if cx + w > frame.shape[1] or cy + h > frame.shape[0]:
+                    continue
+
+                pad = 15
+                x1 = max(cx - pad, 0)
+                y1 = max(cy - pad, 0)
+                x2 = min(cx + w + pad, frame.shape[1])
+                y2 = min(cy + h + pad, frame.shape[0])
+                crop = frame[y1:y2, x1:x2]
+
+                if crop is None or crop.size == 0:
+                    continue
+
+                try:
+                    tensor = transform(crop).unsqueeze(0).to(DEVICE)
+                    candidates.append(tensor)
+                    positions.append([cx, cy])
+                except Exception as e:
+                    log.warning(f"Failed to transform candidate patch: {e}")
+                    continue
 
         if candidates:
             batch = torch.cat(candidates)
             with torch.no_grad():
                 probs = F.softmax(model(batch), dim=1)[:, class_names.index(true_label)].cpu().numpy()
-            scores = [0.7 * p + 0.3 * safe_iou(gt_boxes[i], [x, y, w, h]) for p, (x, y) in zip(probs, positions)]
-            best = [positions[np.argmax(scores)][0], positions[np.argmax(scores)][1], w, h]
+            scores = [0.80 * p + 0.20 * safe_iou(gt_boxes[i], [x, y, w, h]) for p, (x, y) in zip(probs, positions)]
+            raw_best = [positions[np.argmax(scores)][0], positions[np.argmax(scores)][1], w, h]
         else:
-            best = predicted_boxes[-1]
+            raw_best = predicted_boxes[-1]
+
+        # Smooth the prediction
+        prev_box = predicted_boxes[-1]
+        alpha = 0.6  # adjust smoothing factor as needed
+        best = [
+            int(alpha * raw_best[0] + (1 - alpha) * prev_box[0]),
+            int(alpha * raw_best[1] + (1 - alpha) * prev_box[1]),
+            w, h
+        ]
 
         predicted_boxes.append(best)
         iou_scores.append(safe_iou(gt_boxes[i], best))
+
+        # Periodically reclassify
         if (label := periodic_reclassify(model, transform, class_names, frame, best, i)):
             true_label = label
+
         frames.append(frame_files[i])
 
     for i in range(min(len(frames), len(gt_boxes))):
-        results.append(dict(sequence=seq_name, frame=frames[i],
+        results.append(dict(
+            sequence=seq_name, frame=frames[i],
             gt_x=gt_boxes[i][0], gt_y=gt_boxes[i][1], gt_w=gt_boxes[i][2], gt_h=gt_boxes[i][3],
-            pred_x=predicted_boxes[i][0], pred_y=predicted_boxes[i][1], pred_w=predicted_boxes[i][2], pred_h=predicted_boxes[i][3],
-            iou=iou_scores[i]))
+            pred_x=predicted_boxes[i][0], pred_y=predicted_boxes[i][1],
+            pred_w=predicted_boxes[i][2], pred_h=predicted_boxes[i][3],
+            iou=iou_scores[i]
+        ))
+
     return results
 
 def save_and_report_results(results, output_csv):
@@ -201,8 +234,9 @@ def save_and_report_results(results, output_csv):
     log.info(f"Tracking results saved to {output_csv}")
     if not df.empty:
         log.info(f"Overall Average IoU: {df['iou'].mean():.4f}")
-        print("\n=== Average IoU per Sequence ===")
-        print(df.groupby("sequence")["iou"].mean().reset_index().sort_values(by="iou", ascending=False))
+        print("\n--- Sequences Ranked by Avg IoU ---")
+        print(df.groupby("sequence")["iou"].mean().sort_values())
+
 
 def visualize_prediction(seq="Woman", frame="0002.jpg"):
     df = pd.read_csv(VISUALIZATION_CSV)
