@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
+import seaborn as sns
 
 from torch import nn, optim
 from torch.utils.data import DataLoader, random_split
@@ -15,7 +16,7 @@ from vit_pytorch import ViT
 from sklearn.metrics import confusion_matrix
 
 # ========== CONFIG ==========
-DATASET_ROOT = "/mnt/beegfs/dgx/acarranza/docs/harris-sentinel-swarm/OTB100"
+DATASET_ROOT = "./OTB100"
 CSV_LOG_PATH = "vit_test_predictions.csv"
 MODEL_SAVE_PATH = "vit_target_recognition.pth"
 CSV_OUTPUT = "tracking_classification_output.csv"
@@ -112,6 +113,32 @@ def run_training(model, loader):
         log.info(f"[Epoch {epoch+1}] Loss: {loss:.4f}, Train Acc: {acc:.2f}%")
         log_time(start, f"Epoch {epoch+1}")
     return model
+
+def plot_confusion_matrix(csv_path, title="ViT Classifier - Confusion Matrix", save_path=None):
+    df = pd.read_csv(csv_path)
+
+    if "true_label" not in df.columns or "predicted_label" not in df.columns:
+        log.warning("CSV does not contain required columns: 'true_label' and 'predicted_label'")
+        return
+
+    true_labels = df["true_label"]
+    pred_labels = df["predicted_label"]
+    labels = sorted(df["true_label"].unique())
+
+    cm = confusion_matrix(true_labels, pred_labels, labels=labels)
+
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=labels, yticklabels=labels)
+    plt.xlabel("Predicted Label")
+    plt.ylabel("True Label")
+    plt.title(title)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path)
+        log.info(f"Confusion matrix saved to {save_path}")
+    # else:
+    #     plt.show()
 
 # ========== TEST ==========
 def test(model, loader, class_names, csv_path):
@@ -241,7 +268,10 @@ def save_and_report_results(results, output_csv):
 def visualize_prediction(seq="Woman", frame="0002.jpg"):
     df = pd.read_csv(VISUALIZATION_CSV)
     match = df[(df["sequence"] == seq) & (df["frame"] == frame)]
-    if match.empty: return
+    if match.empty:
+        log.warning(f"No matching frame found for {seq}/{frame}")
+        return
+
     row = match.iloc[0]
     img_path = os.path.join(DATASET_ROOT, seq, "img", frame)
     image = cv2.imread(img_path)
@@ -275,6 +305,8 @@ def main():
     model.load_state_dict(torch.load(MODEL_SAVE_PATH, map_location=DEVICE))
     model.eval()
     inference_transform = get_transforms(for_inference=True)
+    # plot_confusion_matrix(CSV_LOG_PATH, save_path="vit_confusion_matrix.png")
+    plot_confusion_matrix(CSV_LOG_PATH)
 
     all_results = []
     for seq in sorted(os.listdir(DATASET_ROOT)):
