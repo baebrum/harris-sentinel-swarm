@@ -278,8 +278,8 @@ def main():
 
     all_results = []
     for seq in sorted(os.listdir(DATASET_ROOT)):
-        if seq != "Woman":
-            continue
+        # if seq != "Woman":
+        #     continue
         log.info(f"Tracking {seq}")
         all_results.extend(track_sequence(seq, model, inference_transform, class_names))
 
