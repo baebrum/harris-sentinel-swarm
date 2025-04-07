@@ -25,7 +25,7 @@ BATCH_SIZE, EPOCHS = 16, 5
 IMG_SIZE = 224
 TRAIN_SPLIT = 0.9
 LEARNING_RATE = 3e-4
-SEARCH_RADIUS, STRIDE = 10, 10
+SEARCH_RADIUS, STRIDE = 15, 10
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.backends.cudnn.benchmark = True
@@ -172,7 +172,7 @@ def track_sequence(seq_name, model, transform, class_names):
                 if cx + w > frame.shape[1] or cy + h > frame.shape[0]:
                     continue
 
-                pad = 15
+                pad = 17
                 x1 = max(cx - pad, 0)
                 y1 = max(cy - pad, 0)
                 x2 = min(cx + w + pad, frame.shape[1])
@@ -201,7 +201,7 @@ def track_sequence(seq_name, model, transform, class_names):
 
         # Smooth the prediction
         prev_box = predicted_boxes[-1]
-        alpha = 0.6  # adjust smoothing factor as needed
+        alpha = 0.4  # adjust smoothing factor as needed
         best = [
             int(alpha * raw_best[0] + (1 - alpha) * prev_box[0]),
             int(alpha * raw_best[1] + (1 - alpha) * prev_box[1]),
