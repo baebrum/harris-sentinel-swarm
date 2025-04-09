@@ -190,6 +190,15 @@ def track_sequence(seq_name, model, transform, class_names):
 
     for i in range(1, len(frame_files)):
         frame = cv2.imread(os.path.join(img_folder, frame_files[i]))
+        
+        # ========== FRAME CHECK ==========
+        if frame is None:
+            log.warning(f"Skipping frame {frame_files[i]} — image could not be loaded.")
+            predicted_boxes.append(predicted_boxes[-1])
+            iou_scores.append(0.0)
+            frames.append(frame_files[i])
+            continue
+
         prev_x, prev_y, w, h = predicted_boxes[-1]
         candidates, positions = [], []
 
