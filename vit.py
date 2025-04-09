@@ -3,6 +3,7 @@
 import os, re, csv, time, logging
 import cv2
 import torch
+import re
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -21,8 +22,12 @@ CSV_LOG_PATH = "vit_test_predictions.csv"
 MODEL_SAVE_PATH = "vit_target_recognition.pth"
 CSV_OUTPUT = "tracking_classification_output.csv"
 VISUALIZATION_CSV = CSV_OUTPUT
+SAVE_PLOTS = True
+OUTPUT_DIR = "./outputs"
+FILTER_DATASET = True
+FILTER_PATTERN = r"(Man|Woman)"  # Regex pattern
 
-BATCH_SIZE, EPOCHS = 16, 5
+BATCH_SIZE, EPOCHS = 16, 3
 IMG_SIZE = 224
 TRAIN_SPLIT = 0.9
 LEARNING_RATE = 3e-4
@@ -65,12 +70,45 @@ def get_transforms(for_inference=False):
 def prepare_dataloaders():
     transform = get_transforms()
     dataset = datasets.ImageFolder(DATASET_ROOT, transform=transform)
-    class_names = dataset.classes
+
+    if FILTER_DATASET:
+        # Apply regex pattern to dataset.classes
+        pattern = re.compile(FILTER_PATTERN)
+        selected_classes = sorted([cls for cls in dataset.classes if pattern.search(cls)])
+        if not selected_classes:
+            raise ValueError("No classes matched the given regex pattern.")
+
+        selected_class_idxs = {
+            cls: idx for cls, idx in dataset.class_to_idx.items() if cls in selected_classes
+        }
+
+        # Filter dataset samples
+        filtered_samples = [s for s in dataset.samples if s[1] in selected_class_idxs.values()]
+        dataset.samples = filtered_samples
+        dataset.targets = [label for _, label in filtered_samples]
+
+        # Re-map class indices to start from 0
+        old_to_new_idx = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted(selected_class_idxs.values()))}
+        dataset.samples = [(path, old_to_new_idx[label]) for path, label in dataset.samples]
+        dataset.targets = [old_to_new_idx[label] for label in dataset.targets]
+
+        # Update class_to_idx and classes
+        idx_to_class = {v: k for k, v in selected_class_idxs.items()}
+        new_classes = [idx_to_class[old_idx] for old_idx in sorted(selected_class_idxs.values())]
+        dataset.class_to_idx = {cls: i for i, cls in enumerate(new_classes)}
+        dataset.classes = new_classes
+
+        log.info(f"Filtered classes: {dataset.classes}")
+    else:
+        log.info(f"Using full dataset: {dataset.classes}")
+
+    # Train/test split and DataLoaders
     train_len = int(TRAIN_SPLIT * len(dataset))
-    train_set, test_set = random_split(dataset, [train_len, len(dataset)-train_len])
+    train_set, test_set = random_split(dataset, [train_len, len(dataset) - train_len])
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
     test_loader = DataLoader(test_set, batch_size=1, shuffle=False)
-    return train_loader, test_loader, class_names
+
+    return train_loader, test_loader, dataset.classes
 
 # ========== MODEL ==========
 def build_model(num_classes):
@@ -134,11 +172,10 @@ def plot_confusion_matrix(csv_path, title="ViT Classifier - Confusion Matrix", s
     plt.title(title)
     plt.tight_layout()
 
-    if save_path:
+    if SAVE_PLOTS:
+        save_path = os.path.join(OUTPUT_DIR, "vit_confusion_matrix.png")
         plt.savefig(save_path)
         log.info(f"Confusion matrix saved to {save_path}")
-    # else:
-    #     plt.show()
 
 # ========== TEST ==========
 def test(model, loader, class_names, csv_path):
@@ -190,7 +227,7 @@ def track_sequence(seq_name, model, transform, class_names):
 
     for i in range(1, len(frame_files)):
         frame = cv2.imread(os.path.join(img_folder, frame_files[i]))
-        
+
         # ========== FRAME CHECK ==========
         if frame is None:
             log.warning(f"Skipping frame {frame_files[i]} — image could not be loaded.")
@@ -298,8 +335,14 @@ def visualize_prediction(seq="Woman", frame="0002.jpg"):
     plt.title(f"{seq} | Frame: {frame} | IoU: {row['iou']:.2f}")
     plt.axis("off")
 
+    if SAVE_PLOTS:
+        save_path = os.path.join(OUTPUT_DIR, f"{seq}_{frame}_vis.png")
+        plt.savefig(save_path)
+        log.info(f"Saved visualization to {save_path}")
+
 # ========== MAIN ==========
 def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     start = time.time()
     train_loader, test_loader, class_names = prepare_dataloaders()
     model = build_model(len(class_names))
@@ -319,17 +362,25 @@ def main():
 
     all_results = []
     for seq in sorted(os.listdir(DATASET_ROOT)):
-        # if seq != "Woman":
-        #     continue
+        if FILTER_DATASET:
+            if seq not in FILTER_PATTERN:
+                continue
         log.info(f"Tracking {seq}")
         all_results.extend(track_sequence(seq, model, inference_transform, class_names))
 
     save_and_report_results(all_results, CSV_OUTPUT)
 
     # Optional: Visualization
-    for frame_id in ["0002.jpg", "0032.jpg", "0100.jpg", "0200.jpg"]:
-        visualize_prediction("Woman", frame_id)
-    plt.show()
+    for seq in sorted(os.listdir(DATASET_ROOT)):
+        if FILTER_DATASET:
+            if seq not in FILTER_PATTERN:
+                continue
+
+        for frame_id in ["0002.jpg", "0032.jpg", "0100.jpg", "0200.jpg"]:
+            visualize_prediction(seq, frame_id)
+
+    if not SAVE_PLOTS:
+        plt.show()
 
 if __name__ == "__main__":
     main()
