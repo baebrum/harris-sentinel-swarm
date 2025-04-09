@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import datasets, transforms
 from vit_pytorch import ViT
 from sklearn.metrics import confusion_matrix
+from collections import deque
 
 # ========== CONFIG ==========
 DATASET_ROOT = "./OTB100"
@@ -223,6 +224,8 @@ def track_sequence(seq_name, model, transform, class_names):
     true_label, _ = classify_patch(model, transform, class_names, frame0[y:y+h, x:x+w])
     predicted_boxes = [[x, y, w, h]]
     iou_scores = [1.0]
+    motion_vectors = [(0, 0)]  # first frame has no motion
+    motion_window = deque(maxlen=3)
     frames = [frame_files[0]]
 
     for i in range(1, len(frame_files)):
@@ -281,8 +284,32 @@ def track_sequence(seq_name, model, transform, class_names):
             w, h
         ]
 
+        # Compute center-based motion vector BEFORE appending best
+        prev_box = predicted_boxes[-1]
+        prev_cx = prev_box[0] + prev_box[2] // 2
+        prev_cy = prev_box[1] + prev_box[3] // 2
+        curr_cx = best[0] + best[2] // 2
+        curr_cy = best[1] + best[3] // 2
+
+        dx = curr_cx - prev_cx
+        dy = curr_cy - prev_cy
+
+        motion_window.append((dx, dy))
+        avg_dx = int(np.mean([v[0] for v in motion_window]))
+        avg_dy = int(np.mean([v[1] for v in motion_window]))
+        motion_vectors.append((avg_dx, avg_dy))
+
+        # NOW append best after using prev_box
         predicted_boxes.append(best)
         iou_scores.append(safe_iou(gt_boxes[i], best))
+
+        dx = curr_cx - prev_cx
+        dy = curr_cy - prev_cy
+
+        motion_window.append((dx, dy))
+        avg_dx = int(np.mean([v[0] for v in motion_window]))
+        avg_dy = int(np.mean([v[1] for v in motion_window]))
+        motion_vectors.append((avg_dx, avg_dy))
 
         # Periodically reclassify
         if (label := periodic_reclassify(model, transform, class_names, frame, best, i)):
@@ -291,12 +318,14 @@ def track_sequence(seq_name, model, transform, class_names):
         frames.append(frame_files[i])
 
     for i in range(min(len(frames), len(gt_boxes))):
+        dx, dy = motion_vectors[i]
         results.append(dict(
             sequence=seq_name, frame=frames[i],
             gt_x=gt_boxes[i][0], gt_y=gt_boxes[i][1], gt_w=gt_boxes[i][2], gt_h=gt_boxes[i][3],
             pred_x=predicted_boxes[i][0], pred_y=predicted_boxes[i][1],
             pred_w=predicted_boxes[i][2], pred_h=predicted_boxes[i][3],
-            iou=iou_scores[i]
+            iou=iou_scores[i],
+            dx=dx, dy=dy
         ))
 
     return results
@@ -327,8 +356,35 @@ def visualize_prediction(seq="Woman", frame="0002.jpg"):
 
     gt = tuple(map(int, (row["gt_x"], row["gt_y"], row["gt_w"], row["gt_h"])))
     pred = tuple(map(int, (row["pred_x"], row["pred_y"], row["pred_w"], row["pred_h"])))
+
+    # Draw ground truth (green) and predicted (blue) boxes
     cv2.rectangle(image, (gt[0], gt[1]), (gt[0]+gt[2], gt[1]+gt[3]), (0, 255, 0), 2)
     cv2.rectangle(image, (pred[0], pred[1]), (pred[0]+pred[2], pred[1]+pred[3]), (255, 0, 0), 2)
+
+    # Draw motion arrow (red)
+    # Compute normalized direction
+    dx, dy = int(row.get("dx", 0)), int(row.get("dy", 0))
+    cx = pred[0] + pred[2] // 2
+    cy = pred[1] + pred[3] // 2
+
+    arrow_length = 30  # Fixed arrow length
+    norm = np.hypot(dx, dy)
+
+    if norm > 1:  # Only draw if there's significant movement
+        dx_norm = int((dx / norm) * arrow_length)
+        dy_norm = int((dy / norm) * arrow_length)
+
+        cv2.arrowedLine(
+            image,
+            (cx, cy),
+            (cx + dx_norm, cy + dy_norm),
+            (0, 0, 255),  # Red
+            2,
+            tipLength=0.3
+        )
+    else:
+        log.info(f"Frame {frame}: Not drawing arrow (dx={dx}, dy={dy})")
+
 
     plt.figure(figsize=(10, 6))
     plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
@@ -340,6 +396,69 @@ def visualize_prediction(seq="Woman", frame="0002.jpg"):
         plt.savefig(save_path)
         log.info(f"Saved visualization to {save_path}")
 
+def generate_tracking_video(sequence_name, output_path="tracking_output.mp4", fps=30):
+    df = pd.read_csv(VISUALIZATION_CSV)
+    seq_df = df[df["sequence"] == sequence_name]
+
+    if seq_df.empty:
+        log.warning(f"No tracking data found for sequence: {sequence_name}")
+        return
+
+    img_folder = os.path.join(DATASET_ROOT, sequence_name, "img")
+    frame_files = sorted(seq_df["frame"].tolist())
+
+    # Get frame size from first image
+    first_img = cv2.imread(os.path.join(img_folder, frame_files[0]))
+    if first_img is None:
+        log.error(f"Failed to load frame: {frame_files[0]}")
+        return
+    height, width = first_img.shape[:2]
+
+    # Video writer
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+    for _, row in seq_df.iterrows():
+        frame_path = os.path.join(img_folder, row["frame"])
+        frame = cv2.imread(frame_path)
+        if frame is None:
+            log.warning(f"Missing frame: {frame_path}")
+            continue
+
+        # Draw GT box (green)
+        gt = (int(row["gt_x"]), int(row["gt_y"]), int(row["gt_w"]), int(row["gt_h"]))
+        cv2.rectangle(frame, (gt[0], gt[1]), (gt[0]+gt[2], gt[1]+gt[3]), (0, 255, 0), 2)
+
+        # Draw predicted box (blue)
+        pred = (int(row["pred_x"]), int(row["pred_y"]), int(row["pred_w"]), int(row["pred_h"]))
+        cv2.rectangle(frame, (pred[0], pred[1]), (pred[0]+pred[2], pred[1]+pred[3]), (255, 0, 0), 2)
+
+        # Draw motion arrow (red, fixed length, normalized)
+        dx, dy = int(row.get("dx", 0)), int(row.get("dy", 0))
+        cx = pred[0] + pred[2] // 2
+        cy = pred[1] + pred[3] // 2
+        norm = np.hypot(dx, dy)
+        arrow_length = 30
+        if norm > 1:
+            dx_norm = int((dx / norm) * arrow_length)
+            dy_norm = int((dy / norm) * arrow_length)
+            cv2.arrowedLine(frame, (cx, cy), (cx + dx_norm, cy + dy_norm), (0, 0, 255), 2, tipLength=0.3)
+
+        # Put IoU text
+        cv2.putText(
+            frame,
+            f"Frame: {row['frame']} | IoU: {row['iou']:.2f}",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 255),
+            2
+        )
+
+        out.write(frame)
+
+    out.release()
+    log.info(f"Video saved to {output_path}")
 # ========== MAIN ==========
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -378,9 +497,11 @@ def main():
 
         for frame_id in ["0002.jpg", "0032.jpg", "0100.jpg", "0200.jpg"]:
             visualize_prediction(seq, frame_id)
+        generate_tracking_video("Woman", os.path.join(OUTPUT_DIR, f"{seq}_tracking_output.mp4"))
 
     if not SAVE_PLOTS:
         plt.show()
+
 
 if __name__ == "__main__":
     main()
