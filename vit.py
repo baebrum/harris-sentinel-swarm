@@ -18,7 +18,7 @@ from sklearn.metrics import confusion_matrix
 from collections import deque
 
 # ========== CONFIG ==========
-DATASET_ROOT = "./OTB100"
+DATASET_ROOT = "CompE696/compe-696/OTB100"
 CSV_LOG_PATH = "vit_test_predictions.csv"
 MODEL_SAVE_PATH = "vit_target_recognition.pth"
 CSV_OUTPUT = "tracking_classification_output.csv"
@@ -459,45 +459,66 @@ def generate_tracking_video(sequence_name, output_path="tracking_output.mp4", fp
 
     out.release()
     log.info(f"Video saved to {output_path}")
+
 # ========== MAIN ==========
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    start = time.time()
-    train_loader, test_loader, class_names = prepare_dataloaders()
-    model = build_model(len(class_names))
-    model = run_training(model, train_loader)
-    torch.save(model.state_dict(), MODEL_SAVE_PATH)
-    log.info(f"Model saved at {MODEL_SAVE_PATH}")
-
-    accuracy = test(model, test_loader, class_names, CSV_LOG_PATH)
-    log.info(f"Test Accuracy: {accuracy:.2f}%")
-
-    # Load model for inference
-    model.load_state_dict(torch.load(MODEL_SAVE_PATH, map_location=DEVICE))
-    model.eval()
     inference_transform = get_transforms(for_inference=True)
-    # plot_confusion_matrix(CSV_LOG_PATH, save_path="vit_confusion_matrix.png")
-    plot_confusion_matrix(CSV_LOG_PATH)
 
+    if os.path.exists(MODEL_SAVE_PATH):
+        log.info(f"Found existing model at {MODEL_SAVE_PATH}. Skipping training...")
+
+        # --- Load class names manually ---
+        transform = get_transforms()
+        dataset = datasets.ImageFolder(DATASET_ROOT, transform=transform)
+
+        if FILTER_DATASET:
+            pattern = re.compile(FILTER_PATTERN)
+            selected_classes = sorted([cls for cls in dataset.classes if pattern.search(cls)])
+            class_names = selected_classes
+            log.info(f"Filtered classes for tracking: {class_names}")
+        else:
+            class_names = dataset.classes
+            log.info(f"Full classes for tracking: {class_names}")
+
+        model = build_model(len(class_names))
+        model.load_state_dict(torch.load(MODEL_SAVE_PATH, map_location=DEVICE))
+        model.eval()
+
+    else:
+        start = time.time()
+        train_loader, test_loader, class_names = prepare_dataloaders()
+        model = build_model(len(class_names))
+        model = run_training(model, train_loader)
+        torch.save(model.state_dict(), MODEL_SAVE_PATH)
+        log.info(f"Model saved at {MODEL_SAVE_PATH}")
+
+        accuracy = test(model, test_loader, class_names, CSV_LOG_PATH)
+        log.info(f"Test Accuracy: {accuracy:.2f}%")
+
+        plot_confusion_matrix(CSV_LOG_PATH)
+        log_time(start, "Training and evaluation")
+
+    # --- Tracking ---
     all_results = []
     for seq in sorted(os.listdir(DATASET_ROOT)):
-        if FILTER_DATASET:
-            if seq not in FILTER_PATTERN:
-                continue
+        if FILTER_DATASET and not re.search(FILTER_PATTERN, seq):
+            continue
+
         log.info(f"Tracking {seq}")
         all_results.extend(track_sequence(seq, model, inference_transform, class_names))
 
     save_and_report_results(all_results, CSV_OUTPUT)
 
-    # Optional: Visualization
+    # --- Visualization ---
     for seq in sorted(os.listdir(DATASET_ROOT)):
-        if FILTER_DATASET:
-            if seq not in FILTER_PATTERN:
-                continue
+        if FILTER_DATASET and not re.search(FILTER_PATTERN, seq):
+            continue
 
         for frame_id in ["0002.jpg", "0032.jpg", "0100.jpg", "0200.jpg"]:
             visualize_prediction(seq, frame_id)
-        generate_tracking_video("Woman", os.path.join(OUTPUT_DIR, f"{seq}_tracking_output.mp4"))
+
+        generate_tracking_video(seq, os.path.join(OUTPUT_DIR, f"{seq}_tracking_output.mp4"))
 
     if not SAVE_PLOTS:
         plt.show()
