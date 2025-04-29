@@ -9,14 +9,14 @@ VIT_PATH = "/Users/jacobanderson/Documents/Spring 2025/CompE696/compe-696/vit_ta
 YOLO_MODEL = "yolov5s.pt"  # Or yolov5m.pt / yolov5l.pt
 IMG_SIZE = 224
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-LABELS = ["men, women"]  # Update your ViT labels
+LABELS = ["man, woman"]  # Update your ViT labels
 # ==========================================
 
 # Load ViT model
 vit = ViT(
     image_size=IMG_SIZE,
     patch_size=16,
-    num_classes=9,  # MATCH how many classes you trained with!
+    num_classes=2,  # MATCH how many classes you trained with!
     dim=512,
     depth=6,
     heads=8,
