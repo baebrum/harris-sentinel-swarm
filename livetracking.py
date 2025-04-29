@@ -9,7 +9,7 @@ VIT_PATH = "/Users/jacobanderson/Documents/Spring 2025/CompE696/compe-696/vit_ta
 YOLO_MODEL = "yolov5s.pt"  # Or yolov5m.pt / yolov5l.pt
 IMG_SIZE = 224
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-LABELS = ["man, woman"]  # Update your ViT labels
+LABELS = ["man", "woman"]  # Update your ViT labels
 # ==========================================
 
 # Load ViT model
@@ -67,10 +67,11 @@ while True:
             input_tensor = transform(cropped).unsqueeze(0).to(DEVICE)
             output = vit(input_tensor)
             class_idx = torch.argmax(output, dim=1).item()
-            if class_idx >= len(LABELS):
-                class_label = "Unknown"
-            else:
-                class_label = LABELS[class_idx]
+        if 0 <= class_idx < len(LABELS):
+            class_label = LABELS[class_idx]
+        else:
+            class_label = "Unknown"
+
 
         # Draw bounding box and label
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)

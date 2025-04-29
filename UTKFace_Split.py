@@ -4,9 +4,9 @@ import random
 from tqdm import tqdm  # progress bar
 
 # === CONFIGURATION ===
-INPUT_FOLDER = "/Users/jacobanderson/Documents/Spring 2025/CompE696/compe-696/UTKFace/UTKFace"   # Change this to your actual UTKFace image folder
-OUTPUT_FOLDER = "UTKFace_5000_Split"
-N_SAMPLES = 2500
+INPUT_FOLDER = "/Users/jacobanderson/Documents/Spring 2025/UTKFace"   # Change this to your actual UTKFace image folder
+OUTPUT_FOLDER = "/Users/jacobanderson/Documents/Spring 2025/CompE696/compe-696/UTKFace_5000_Split"
+N_SAMPLES = 10000
 
 # === Create output directories ===
 os.makedirs(os.path.join(OUTPUT_FOLDER, "man"), exist_ok=True)
