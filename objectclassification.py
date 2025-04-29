@@ -15,13 +15,13 @@ from sklearn.metrics import confusion_matrix
 from vit_pytorch import ViT
 
 # ========== CONFIG ==========
-DATASET_ROOT = "/Users/jacobanderson/Documents/Spring 2025/CompE696/compe-696/Man-Woman"
+DATASET_ROOT = "/Users/jacobanderson/Documents/Spring 2025/CompE696/compe-696/UTKFace_5000_Split"
 MODEL_SAVE_PATH = "vit_target_recognition.pth"
 CSV_LOG_PATH = "vit_test_predictions.csv"
 SAVE_PLOTS = True
 OUTPUT_DIR = "./outputs"
 FILTER_DATASET = True
-FILTER_PATTERN = r"(men|women)"
+FILTER_PATTERN = r"(man|woman)"
 
 BATCH_SIZE, EPOCHS = 16, 3
 IMG_SIZE = 224
@@ -82,7 +82,7 @@ def build_model(num_classes):
     model = ViT(
         image_size=IMG_SIZE,
         patch_size=16,
-        num_classes=num_classes,
+        num_classes=2,
         dim=512,
         depth=6,
         heads=8,
