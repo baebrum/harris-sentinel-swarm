@@ -3,6 +3,7 @@ import torch
 from torchvision import transforms
 from vit_pytorch import ViT
 import numpy as np
+import time
 
 # ================= CONFIG =================
 VIT_PATH = "/Users/jacobanderson/Documents/Spring 2025/CompE696/compe-696/vit_target_recognition.pth"
@@ -43,10 +44,22 @@ transform = transforms.Compose([
 cap = cv2.VideoCapture(0)
 print("[INFO] Running live YOLO+ViT tracking. Press 'q' to quit.")
 
+prev_time = time.time()  # put this before the loop starts
+
 while True:
     ret, frame = cap.read()
     if not ret:
         break
+
+    # ==== FPS COUNTER ====
+    curr_time = time.time()
+    fps = 1.0 / (curr_time - prev_time)
+    prev_time = curr_time
+
+    # Draw FPS on frame
+    fps_text = f"FPS: {fps:.2f}"
+    cv2.putText(frame, fps_text, (frame.shape[1] - 180, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+    # =====================
 
     # Run YOLO detection
     results = yolo(frame)  # <- NOT .predict()
@@ -75,8 +88,10 @@ while True:
 
         # Draw bounding box and label
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(frame, f"{class_label}", (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        # cv2.putText(frame, f"{class_label}", (x1, y1 - 10),
+        #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(frame, f"{class_label} ({conf*100:.1f}%)", (x1, y1 - 10),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
     cv2.imshow("YOLO + ViT Tracker", frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
