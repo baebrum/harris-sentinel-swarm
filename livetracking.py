@@ -18,10 +18,10 @@ vit = ViT(
     image_size=IMG_SIZE,
     patch_size=16,
     num_classes=2,  # MATCH how many classes you trained with!
-    dim=512,
-    depth=6,
-    heads=8,
-    mlp_dim=1024,
+    dim=128,
+    depth=4,
+    heads=4,
+    mlp_dim=256,
     dropout=0.1,
     emb_dropout=0.1
 )
@@ -30,7 +30,7 @@ vit.to(DEVICE)
 vit.eval()
 
 # Load YOLOv5 model
-yolo = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
+yolo = torch.hub.load('ultralytics/yolov5', 'yolov5n', pretrained=True)
 yolo.to(DEVICE)
 
 # Preprocess function
