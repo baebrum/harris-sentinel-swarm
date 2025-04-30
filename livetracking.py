@@ -5,6 +5,8 @@ from vit_pytorch import ViT
 import numpy as np
 import time
 
+torch.backends.quantized.engine = 'qnnpack'
+
 # ================= CONFIG =================
 VIT_PATH = "vit_target_recognition.pth"
 IMG_SIZE = 224
@@ -17,16 +19,18 @@ vit = ViT(
     image_size=IMG_SIZE,
     patch_size=16,
     num_classes=len(LABELS),
-    dim=128,
-    depth=4,
-    heads=4,
-    mlp_dim=256,
+    dim=64,
+    depth=2,
+    heads=2,
+    mlp_dim=128,
     dropout=0.1,
     emb_dropout=0.1
 )
 vit.load_state_dict(torch.load(VIT_PATH, map_location=DEVICE))
 vit.to(DEVICE)
 vit.eval()
+
+vit = torch.quantization.quantize_dynamic(vit, {torch.nn.Linear}, dtype=torch.qint8)
 
 # Preprocessing transform
 transform = transforms.Compose([
