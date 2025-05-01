@@ -8,7 +8,7 @@ import time
 torch.backends.quantized.engine = 'qnnpack'
 
 # ================= CONFIG =================
-VIT_PATH = "vit_target_recognition.pth"
+VIT_PATH = "vit_target_recognition_supertiny.pth"
 IMG_SIZE = 224
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LABELS = ["man", "woman"]  # Your ViT labels
@@ -19,10 +19,10 @@ vit = ViT(
     image_size=IMG_SIZE,
     patch_size=16,
     num_classes=len(LABELS),
-    dim=64,
-    depth=2,
+    dim=32,
+    depth=1,
     heads=2,
-    mlp_dim=128,
+    mlp_dim=64,
     dropout=0.1,
     emb_dropout=0.1
 )
@@ -44,14 +44,26 @@ face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fronta
 
 # Start webcam
 cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+cap.set(cv2.CAP_PROP_FPS, 24)
+
+print("Resolution:", cap.get(cv2.CAP_PROP_FRAME_WIDTH), "x", cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+print("FPS:", cap.get(cv2.CAP_PROP_FPS))
+
 prev_time = time.time()
+frame_count = 0
+confidence_sum = 0.0
+classified_frames = 0
+start_time = time.time()
 print("[INFO] Running live face-based ViT classification. Press 'q' to quit.")
 
 while True:
     ret, frame = cap.read()
     if not ret:
         break
-
+    
+    frame_count += 1
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
 
@@ -70,6 +82,8 @@ while True:
 
         label = "man" if man_prob > woman_prob else "woman"
         confidence = max(man_prob, woman_prob)
+        confidence_sum += confidence
+        classified_frames += 1
 
         # Draw bounding box and label
         cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
@@ -89,6 +103,12 @@ while True:
     cv2.imshow("ViT Face Tracker", frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
+
+end_time = time.time()
+avg_fps = frame_count / (end_time - start_time)
+avg_conf = (confidence_sum / classified_frames * 100) if classified_frames > 0 else 0.0
+print(f"Average FPS: {avg_fps:.2f}")
+print(f"Average Confidence: {avg_conf:.2f}%")
 
 cap.release()
 cv2.destroyAllWindows()
