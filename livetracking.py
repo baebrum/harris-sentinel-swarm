@@ -35,7 +35,7 @@ PRESETS = {
         "dim": 64,  "depth": 2, "heads": 2, "mlp_dim": 128
     },
     "super_tiny": {
-        "vit_path": "vit_target_recognition_supertiny.pth",
+        "vit_path": "vit_target_recognition_super_tiny.pth",
         "dim": 32,  "depth": 1, "heads": 2, "mlp_dim": 64
     }
 }

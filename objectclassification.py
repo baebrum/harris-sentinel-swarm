@@ -1,4 +1,4 @@
-# vit_training.py (cleaned)
+# vit_training.py (extended to train all ViT configurations)
 
 import os, re, time, logging
 import torch
@@ -15,15 +15,13 @@ from sklearn.metrics import confusion_matrix
 from vit_pytorch import ViT
 
 # ========== CONFIG ==========
-DATASET_ROOT = "/Users/jacobanderson/Documents/Spring 2025/CompE696/compe-696/UTKFace_5000_Split"
-MODEL_SAVE_PATH = "vit_target_recognition.pth"
-CSV_LOG_PATH = "vit_test_predictions.csv"
-SAVE_PLOTS = True
-OUTPUT_DIR = "./outputs"
+DATASET_ROOT = "./UTKFace_5000_Split"
+BASE_MODEL_PATH = "vit_target_recognition"
+BASE_CSV_PATH = "vit_test_predictions"
+BASE_OUTPUT_DIR = "./outputs"
 FILTER_DATASET = True
 FILTER_PATTERN = r"(man|woman)"
-
-BATCH_SIZE, EPOCHS = 16, 3
+BATCH_SIZE, EPOCHS = 128, 8
 IMG_SIZE = 224
 TRAIN_SPLIT = 0.9
 LEARNING_RATE = 3e-4
@@ -33,6 +31,15 @@ torch.backends.cudnn.benchmark = True
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 log = logging.getLogger()
+
+# ========== ViT PRESETS ==========
+# Each preset defines: dim, depth, heads, mlp_dim
+PRESETS = {
+    "standard":    {"dim": 512, "depth": 6, "heads": 8, "mlp_dim": 1024},
+    "small":       {"dim": 128, "depth": 4, "heads": 4, "mlp_dim": 256},
+    "tiny":        {"dim": 64,  "depth": 2, "heads": 2, "mlp_dim": 128},
+    "super_tiny":  {"dim": 32,  "depth": 1, "heads": 2, "mlp_dim": 64},
+}
 
 # ========== HELPERS ==========
 def get_transforms():
@@ -51,21 +58,14 @@ def prepare_dataloaders():
         selected_classes = sorted([cls for cls in dataset.classes if pattern.search(cls)])
         if not selected_classes:
             raise ValueError("No classes matched the regex pattern.")
+        selected_idxs = {cls: idx for cls, idx in dataset.class_to_idx.items() if cls in selected_classes}
+        filtered = [(path, lbl) for path, lbl in dataset.samples if lbl in selected_idxs.values()]
 
-        selected_class_idxs = {cls: idx for cls, idx in dataset.class_to_idx.items() if cls in selected_classes}
-        filtered_samples = [s for s in dataset.samples if s[1] in selected_class_idxs.values()]
-
-        dataset.samples = filtered_samples
-        dataset.targets = [label for _, label in filtered_samples]
-
-        old_to_new_idx = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted(selected_class_idxs.values()))}
-        dataset.samples = [(path, old_to_new_idx[label]) for path, label in dataset.samples]
-        dataset.targets = [old_to_new_idx[label] for label in dataset.targets]
-
-        idx_to_class = {v: k for k, v in selected_class_idxs.items()}
-        new_classes = [idx_to_class[old_idx] for old_idx in sorted(selected_class_idxs.values())]
-        dataset.class_to_idx = {cls: i for i, cls in enumerate(new_classes)}
+        dataset.samples = [(p, list(selected_idxs.values()).index(lbl)) for p, lbl in filtered]
+        dataset.targets = [lbl for _, lbl in dataset.samples]
+        new_classes = list(selected_classes)
         dataset.classes = new_classes
+        dataset.class_to_idx = {cls: i for i, cls in enumerate(new_classes)}
 
         log.info(f"Filtered classes: {dataset.classes}")
     else:
@@ -73,20 +73,20 @@ def prepare_dataloaders():
 
     train_len = int(TRAIN_SPLIT * len(dataset))
     train_set, test_set = random_split(dataset, [train_len, len(dataset) - train_len])
-    train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, num_workers=32, pin_memory=True)
     test_loader = DataLoader(test_set, batch_size=1, shuffle=False)
 
     return train_loader, test_loader, dataset.classes
 
-def build_model(num_classes):
+def build_model(num_classes, cfg):
     model = ViT(
         image_size=IMG_SIZE,
         patch_size=16,
-        num_classes=2,
-        dim=512,
-        depth=6,
-        heads=8,
-        mlp_dim=1024,
+        num_classes=num_classes,
+        dim=cfg["dim"],
+        depth=cfg["depth"],
+        heads=cfg["heads"],
+        mlp_dim=cfg["mlp_dim"],
         dropout=0.1,
         emb_dropout=0.1
     ).to(DEVICE)
@@ -121,18 +121,17 @@ def test(model, loader, class_names, csv_path):
             correct += (pred == labels.item())
             rows.append([idx, class_names[labels.item()], class_names[pred], f"{conf:.4f}"])
             total += 1
-    pd.DataFrame(rows, columns=["image_index", "true_label", "predicted_label", "confidence"]).to_csv(csv_path, index=False)
+    pd.DataFrame(rows, columns=["image_index","true_label","predicted_label","confidence"]) \
+      .to_csv(csv_path, index=False)
     return 100 * correct / total
 
-def plot_confusion_matrix(csv_path):
+def plot_confusion_matrix(csv_path, output_dir):
     df = pd.read_csv(csv_path)
-    if "true_label" not in df.columns or "predicted_label" not in df.columns:
+    if "true_label" not in df or "predicted_label" not in df:
         log.warning("CSV missing required columns.")
         return
-    true_labels = df["true_label"]
-    pred_labels = df["predicted_label"]
-    labels = sorted(true_labels.unique())
-    cm = confusion_matrix(true_labels, pred_labels, labels=labels)
+    labels = sorted(df["true_label"].unique())
+    cm = confusion_matrix(df["true_label"], df["predicted_label"], labels=labels)
 
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=labels, yticklabels=labels)
@@ -141,37 +140,44 @@ def plot_confusion_matrix(csv_path):
     plt.title("ViT Confusion Matrix")
     plt.tight_layout()
 
-    if SAVE_PLOTS:
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        save_path = os.path.join(OUTPUT_DIR, "vit_confusion_matrix.png")
-        plt.savefig(save_path)
-        log.info(f"Confusion matrix saved to {save_path}")
-    else:
-        plt.show()
+    os.makedirs(output_dir, exist_ok=True)
+    save_path = os.path.join(output_dir, "vit_confusion_matrix.png")
+    plt.savefig(save_path)
+    log.info(f"Confusion matrix saved to {save_path}")
 
 # ========== MAIN ==========
 def main():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    train_loader, test_loader, class_names = prepare_dataloaders()
+    for preset_name, cfg in PRESETS.items():
+        log.info(f"=== Training ViT [{preset_name}] ===")
+        # prepare paths
+        model_path   = f"{BASE_MODEL_PATH}_{preset_name}.pth"
+        csv_path     = f"{BASE_CSV_PATH}_{preset_name}.csv"
+        output_dir   = os.path.join(BASE_OUTPUT_DIR, preset_name)
+        os.makedirs(output_dir, exist_ok=True)
 
-    model = build_model(len(class_names))
+        # data
+        train_loader, test_loader, class_names = prepare_dataloaders()
 
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), LEARNING_RATE)
+        # model, loss, optimizer
+        model     = build_model(len(class_names), cfg)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    for epoch in range(EPOCHS):
-        start = time.time()
-        loss, acc = train(model, train_loader, criterion, optimizer)
-        log.info(f"[Epoch {epoch+1}] Loss: {loss:.4f}, Train Acc: {acc:.2f}%")
-        log.info(f"Epoch {epoch+1} took {time.time() - start:.2f} seconds")
+        # training loop
+        for epoch in range(EPOCHS):
+            start = time.time()
+            loss, acc = train(model, train_loader, criterion, optimizer)
+            log.info(f"[{preset_name}][Epoch {epoch+1}/{EPOCHS}] Loss: {loss:.4f}, Train Acc: {acc:.2f}%")
+            log.info(f"[{preset_name}] Epoch {epoch+1} took {time.time() - start:.2f}s")
 
-    torch.save(model.state_dict(), MODEL_SAVE_PATH)
-    log.info(f"Model saved at {MODEL_SAVE_PATH}")
+        # save model
+        torch.save(model.state_dict(), model_path)
+        log.info(f"[{preset_name}] Model saved at {model_path}")
 
-    accuracy = test(model, test_loader, class_names, CSV_LOG_PATH)
-    log.info(f"Test Accuracy: {accuracy:.2f}%")
-
-    plot_confusion_matrix(CSV_LOG_PATH)
+        # evaluate & plot
+        test_acc = test(model, test_loader, class_names, csv_path)
+        log.info(f"[{preset_name}] Test Accuracy: {test_acc:.2f}%")
+        plot_confusion_matrix(csv_path, output_dir)
 
 if __name__ == "__main__":
     main()
