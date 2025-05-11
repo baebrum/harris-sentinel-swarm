@@ -1,5 +1,3 @@
-# vit_training.py (extended to train all ViT configurations)
-
 import os, re, time, logging
 import torch
 import pandas as pd
@@ -14,7 +12,7 @@ from sklearn.metrics import confusion_matrix
 
 from vit_pytorch import ViT
 
-# ========== CONFIG ==========
+# CONFIG
 DATASET_ROOT = "./UTKFace_5000_Split"
 BASE_MODEL_PATH = "vit_target_recognition"
 BASE_CSV_PATH = "vit_test_predictions"
@@ -32,7 +30,7 @@ torch.backends.cudnn.benchmark = True
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 log = logging.getLogger()
 
-# ========== ViT PRESETS ==========
+# ViT PRESETS
 # Each preset defines: dim, depth, heads, mlp_dim
 PRESETS = {
     "standard":    {"dim": 512, "depth": 6, "heads": 8, "mlp_dim": 1024},
@@ -41,7 +39,7 @@ PRESETS = {
     "super_tiny":  {"dim": 32,  "depth": 1, "heads": 2, "mlp_dim": 64},
 }
 
-# ========== HELPERS ==========
+# HELPERS
 def get_transforms():
     return transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -145,7 +143,7 @@ def plot_confusion_matrix(csv_path, output_dir):
     plt.savefig(save_path)
     log.info(f"Confusion matrix saved to {save_path}")
 
-# ========== MAIN ==========
+# MAIN
 def main():
     for preset_name, cfg in PRESETS.items():
         log.info(f"=== Training ViT [{preset_name}] ===")

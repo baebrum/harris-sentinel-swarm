@@ -8,7 +8,7 @@ import argparse
 
 torch.backends.quantized.engine = 'qnnpack'
 
-# ================= ARGPARSE CONFIG =================
+# ARGPARSE CONFIG
 parser = argparse.ArgumentParser(description="ViT Face Classification (webcam)")
 
 parser.add_argument(
@@ -19,7 +19,7 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-# ================ PRESETS DEFINITION ================
+# PRESETS DEFINITION
 # Each preset defines: checkpoint filename, dim, depth, heads, mlp_dim
 PRESETS = {
     "standard": {
@@ -42,7 +42,7 @@ PRESETS = {
 
 cfg = PRESETS[args.config]
 
-# ================= CONFIG =================
+# CONFIG
 VIT_PATH    = cfg["vit_path"]
 IMG_SIZE    = 224
 PATCH_SIZE  = 16
@@ -55,7 +55,6 @@ EMB_DROPOUT = 0.1
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LABELS = ["man", "woman"]  # Your ViT labels
-# ==========================================
 
 print(f"[INFO] Loading '{args.config}' ViT — {DIM}-dim, {DEPTH} blocks, {HEADS} heads, MLP {MLP_DIM}")
 
